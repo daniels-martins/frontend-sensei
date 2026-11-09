@@ -19,6 +19,15 @@ use Laravel\Mcp\Server\Attributes\Version;
 #[Instructions('Frontend Sensei is a professional UI/UX expertise plugin. It provides code audit tools for accessibility (WCAG 2.2), CSS quality, color contrast, animation performance, and full component audits. It tracks your frontend quality scores over time. Use audit-accessibility-tool to check HTML, audit-css-tool to check stylesheets, check-color-contrast-tool for WCAG contrast ratios, audit-animation-tool for animation performance, audit-component-tool for a comprehensive audit, and frontend-score-tool to view your quality trends.')]
 class FrontendSenseiServer extends Server
 {
+    protected array $capabilities = [
+        self::CAPABILITY_TOOLS => [
+            'listChanged' => false,
+        ],
+        self::CAPABILITY_PROMPTS => [
+            'listChanged' => false,
+        ],
+    ];
+
     protected array $tools = [
         AuditAccessibilityTool::class,
         AuditCssTool::class,

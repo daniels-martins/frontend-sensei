@@ -20,37 +20,45 @@ class AuditComponentPrompt extends Prompt
             new Argument('html', 'The HTML markup of the component to audit.', required: true),
             new Argument('css', 'The CSS styles for this component.'),
             new Argument('js', 'Any JavaScript for this component (animation, interaction logic).'),
+            new Argument('context', 'Description of the component being audited (e.g. "login form", "checkout modal").'),
         ];
     }
 
     public function handle(Request $request): Response
     {
         $html = $request->get('html', '');
+
+        if (trim($html) === '') {
+            throw new \InvalidArgumentException('The html argument is required and cannot be empty.');
+        }
+
         $css = $request->get('css');
         $js = $request->get('js');
+        $context = $request->get('context');
 
-        $parts = ["Audit this frontend component using all available tools:\n"];
+        $parts = ["Audit this frontend component using the tools below:\n"];
 
-        $parts[] = "**HTML:**\n```html\n{$html}\n```\n";
+        $parts[] = "````html\n{$html}\n````\n";
 
         if ($css) {
-            $parts[] = "**CSS:**\n```css\n{$css}\n```\n";
+            $parts[] = "````css\n{$css}\n````\n";
         }
 
         if ($js) {
-            $parts[] = "**JavaScript:**\n```js\n{$js}\n```\n";
+            $parts[] = "````js\n{$js}\n````\n";
         }
 
+        $steps = [];
+        $toolArgs = 'the HTML'.($css ? ', CSS' : '').($js ? ' and JS' : '');
+        $contextArg = $context ? " and context \"{$context}\"" : '';
+        $steps[] = "`audit-component-tool` with {$toolArgs}{$contextArg} for the overall quality score";
+        $steps[] = '`check-color-contrast-tool` for any foreground/background color pairs you find in the '.($css ? 'CSS' : 'HTML');
+
         $parts[] = 'Run these tools in order:';
-        $parts[] = '1. `audit-accessibility-tool` with the HTML';
-        if ($css) {
-            $parts[] = '2. `audit-css-tool` with the CSS';
+        foreach ($steps as $i => $step) {
+            $parts[] = ($i + 1).'. '.$step;
         }
-        $parts[] = '3. `check-color-contrast-tool` for any color pairs you find in the CSS';
-        if ($css || $js) {
-            $parts[] = '4. `audit-animation-tool` with the CSS and/or JS';
-        }
-        $parts[] = '5. `audit-component-tool` with all inputs for the overall score';
+
         $parts[] = "\nSummarise the results: overall grade, top issues by severity, and specific fixes.";
 
         return Response::text(implode("\n", $parts));

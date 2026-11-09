@@ -64,19 +64,19 @@ class FrontendAuditor
                 $issues[] = $this->issue('warning', 'empty-heading', "Empty <{$h->nodeName}> element. Headings must have text content.", $h);
             }
 
-            $headings[] = $level;
+            $headings[] = ['level' => $level, 'node' => $h];
         }
 
-        if (! empty($headings) && $headings[0] !== 1) {
-            $issues[] = $this->issue('warning', 'heading-order', "Document should start with <h1>, found <h{$headings[0]}>.", null);
+        if (! empty($headings) && $headings[0]['level'] !== 1) {
+            $issues[] = $this->issue('warning', 'heading-order', "Document should start with <h1>, found <h{$headings[0]['level']}>.", $headings[0]['node']);
         }
 
         for ($i = 1; $i < count($headings); $i++) {
-            if ($headings[$i] > $headings[$i - 1] + 1) {
-                $issues[] = $this->issue('warning', 'heading-order', "Heading level skipped: h{$headings[$i - 1]} to h{$headings[$i]}. Do not skip heading levels.", null);
+            if ($headings[$i]['level'] > $headings[$i - 1]['level'] + 1) {
+                $issues[] = $this->issue('warning', 'heading-order', "Heading level skipped: h{$headings[$i - 1]['level']} to h{$headings[$i]['level']}. Do not skip heading levels.", $headings[$i]['node']);
             }
-            if ($headings[$i] < $headings[$i - 1] - 1) {
-                $issues[] = $this->issue('warning', 'heading-order', "Heading jumps backward: h{$headings[$i - 1]} to h{$headings[$i]}. Maintain a logical heading hierarchy.", null);
+            if ($headings[$i]['level'] < $headings[$i - 1]['level'] - 1) {
+                $issues[] = $this->issue('warning', 'heading-order', "Heading jumps backward: h{$headings[$i - 1]['level']} to h{$headings[$i]['level']}. Maintain a logical heading hierarchy.", $headings[$i]['node']);
             }
         }
 
@@ -193,6 +193,17 @@ class FrontendAuditor
             }
         }
 
+        // aria-hidden on ancestor of focusable elements
+        foreach ($xpath->query('//a|//button|//input[not(@type="hidden")]|//select|//textarea|//*[@tabindex]') as $el) {
+            if ($el->getAttribute('aria-hidden') === 'true') {
+                continue;
+            }
+            $ancestors = $xpath->query('ancestor::*[@aria-hidden="true"]', $el);
+            if ($ancestors->length > 0) {
+                $issues[] = $this->issue('critical', 'aria-hidden-focusable', 'Focusable element is inside an aria-hidden="true" ancestor. It is invisible to screen readers but reachable by keyboard.', $el);
+            }
+        }
+
         // aria-labelledby pointing to nonexistent ID
         foreach ($xpath->query('//*[@aria-labelledby]') as $el) {
             $ids = preg_split('/\s+/', trim($el->getAttribute('aria-labelledby')));
@@ -279,7 +290,24 @@ class FrontendAuditor
     {
         $issues = [];
 
+        $originalCss = $css;
         $css = $this->stripCssCommentsAndStrings($css);
+
+        // Non-CSS input detection — return early with F grade
+        if (! preg_match('/[{:;]/', $css) && strlen(trim($css)) > 10) {
+            return [
+                'score' => 0,
+                'grade' => 'F',
+                'issues' => [[
+                    'severity' => 'critical',
+                    'rule' => 'not-css',
+                    'message' => 'Input does not appear to be valid CSS. No selectors, properties, or rules detected.',
+                    'element' => mb_substr(trim($originalCss), 0, 60),
+                ]],
+                'issues_count' => 1,
+                'recommendations' => ['Input does not appear to be valid CSS. Provide valid CSS with selectors and rules.'],
+            ];
+        }
 
         // !important count
         $importantCount = preg_match_all('/!important/', $css);
@@ -473,16 +501,6 @@ class FrontendAuditor
                     'element' => "width: {$w}px",
                 ];
             }
-        }
-
-        // Non-CSS input detection
-        if (! preg_match('/[{:;]/', $css) && strlen(trim($css)) > 10) {
-            $issues[] = [
-                'severity' => 'warning',
-                'rule' => 'not-css',
-                'message' => 'Input does not appear to be valid CSS. No selectors, properties, or rules detected.',
-                'element' => mb_substr(trim($css), 0, 60),
-            ];
         }
 
         // Universal selector overuse
@@ -850,8 +868,26 @@ class FrontendAuditor
             ];
         }
 
+        // will-change with layout properties
+        $willChangeLayoutFlagged = false;
+        preg_match_all('/will-change\s*:\s*([^;{}]+)/', $code, $willChangeMatches);
+        foreach ($willChangeMatches[1] ?? [] as $wcValue) {
+            foreach (array_map('trim', explode(',', $wcValue)) as $wcProp) {
+                if (in_array($wcProp, ['top', 'left', 'right', 'bottom', 'width', 'height', 'margin', 'padding'])) {
+                    $willChangeLayoutFlagged = true;
+                    $issues[] = [
+                        'severity' => 'warning',
+                        'rule' => 'will-change-layout',
+                        'message' => "will-change: {$wcProp} promotes a layout property to its own layer but doesn't avoid the layout cost. Prefer transform/opacity for compositor-only animations.",
+                        'element' => "will-change: {$wcProp}",
+                    ];
+                    break;
+                }
+            }
+        }
+
         // Static will-change
-        if (preg_match('/will-change\s*:\s*(?!auto)/', $code) && ! preg_match('/\.addEventListener|:hover|\.classList/', $code)) {
+        if (! $willChangeLayoutFlagged && preg_match('/will-change\s*:\s*(?!auto)/', $code) && ! preg_match('/\.addEventListener|:hover|\.classList/', $code)) {
             // Universal will-change is worse than just static
             if (preg_match('/\*\s*\{[^}]*will-change/', $code)) {
                 $issues[] = [
@@ -921,11 +957,14 @@ class FrontendAuditor
         $deduped = function (array $issues) use (&$seenRules): array {
             $result = [];
             foreach ($issues as $i) {
-                $key = $i['rule'];
-                if (in_array($key, ['reduced-motion', 'reduced-motion-missing']) && isset($seenRules[$key])) {
+                $dedupKey = match ($i['rule']) {
+                    'reduced-motion', 'reduced-motion-missing' => 'reduced-motion',
+                    default => $i['rule'],
+                };
+                if (in_array($dedupKey, ['reduced-motion', 'transition-all']) && isset($seenRules[$dedupKey])) {
                     continue;
                 }
-                $seenRules[$key] = true;
+                $seenRules[$dedupKey] = true;
                 $result[] = $i;
             }
 
@@ -966,14 +1005,8 @@ class FrontendAuditor
             $overallScore = min($overallScore, 50);
         }
 
-        // Recommendations from all issues
-        $recommendations = array_map(fn ($i) => $i['message'], array_filter(
-            $allIssues,
-            fn ($i) => $i['severity'] !== 'info'
-        ));
-        if (empty($recommendations) && ! empty($allIssues)) {
-            $recommendations = array_map(fn ($i) => $i['message'], array_slice($allIssues, 0, 3));
-        }
+        // Recommendations from all issues (sorted by severity already)
+        $recommendations = array_values(array_map(fn ($i) => $i['message'], $allIssues));
 
         $grade = match (true) {
             $overallScore >= 90 => 'A',
@@ -1028,10 +1061,7 @@ class FrontendAuditor
             };
         }
 
-        $recommendations = array_values(array_map(
-            fn ($i) => $i['message'],
-            array_filter($issues, fn ($i) => $i['severity'] !== 'info')
-        ));
+        $recommendations = array_values(array_map(fn ($i) => $i['message'], $issues));
 
         $grade = match (true) {
             max(0, $score) >= 90 => 'A',

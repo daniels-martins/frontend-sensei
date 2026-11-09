@@ -27,15 +27,10 @@ class AuditCssTool extends Tool
 
         return Response::text(json_encode([
             'score' => $result['score'],
-            'grade' => match (true) {
-                $result['score'] >= 90 => 'A',
-                $result['score'] >= 80 => 'B',
-                $result['score'] >= 70 => 'C',
-                $result['score'] >= 60 => 'D',
-                default => 'F',
-            },
+            'grade' => $result['grade'],
             'issues' => $result['issues'],
             'summary' => count($result['issues']).' issues found',
+            'recommendations' => $result['recommendations'],
         ], JSON_PRETTY_PRINT));
     }
 

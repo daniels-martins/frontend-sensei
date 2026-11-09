@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Professional frontend expertise plugin — audits accessibility, CSS quality, color contrast, animation performance, and component quality. Includes 10 comprehensive skill files covering UI/UX fundamentals, WCAG accessibility, CSS architecture, animation (AOS, GSAP), Three.js, React patterns, Vue patterns, responsive design, performance optimization, and design systems.",
   "author": "Martins Daniels",
-  "homepage": "https://github.com/schoolvillegithub/frontend-sensei",
+  "homepage": "https://github.com/daniels-martins/frontend-sensei",
   "license": "MIT",
   "categories": ["Web", "Development", "Design"],
   "skills": [

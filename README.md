@@ -32,32 +32,45 @@ Frontend Sensei provides **6 MCP audit tools** and **10 comprehensive skill file
 | Performance | Core Web Vitals (LCP/INP/CLS), loading, runtime, caching, fonts, measurement |
 | Design Systems | Design tokens, component API design, dark mode, naming conventions, documentation |
 
+## Built With
+
+- **Laravel 13** + **laravel/mcp v1** — MCP server via Artisan stdio transport
+- **PHP 8.4** — DOMDocument for HTML parsing, WCAG contrast algorithms
+- **SQLite** — Audit result history and quality score tracking
+
 ## Requirements
 
-- PHP 8.2+
-- Laravel 11+
-- `laravel/mcp` package
+- PHP >= 8.4
+- Composer
 
-## Installation
+## Installation (Hermes Agent)
 
 ```bash
-git clone https://github.com/schoolvillegithub/frontend-sensei.git
-cd frontend-sensei
-composer install
+hermes plugins install frontend-sensei
+hermes plugins enable frontend-sensei
+```
+
+After installation, set up the Laravel backend:
+
+```bash
+cd ~/.hermes/plugins/frontend-sensei
+composer install --no-dev --optimize-autoloader
 cp .env.example .env
 php artisan key:generate
-php artisan migrate
+touch database/database.sqlite
+php artisan migrate --no-interaction --force
 ```
 
-## Usage with Hermes Agent
+The `mcp.json` configures the MCP server automatically — Hermes runs `php artisan mcp:start frontend-sensei` in stdio mode.
 
-The plugin runs as an MCP server via stdio:
+## Usage
 
-```bash
-php artisan mcp:start frontend-sensei
-```
+Once installed, Hermes gains audit tools and knowledge base skills automatically:
 
-The `mcp.json` configures this automatically for Hermes Agent.
+- *"Check this HTML for accessibility issues"*
+- *"Is white text on #3b82f6 accessible?"*
+- *"Run a full frontend audit on this component"*
+- *"Show my frontend quality scores"*
 
 ## Example Tool Calls
 

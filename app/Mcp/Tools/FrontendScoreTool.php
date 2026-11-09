@@ -64,7 +64,7 @@ class FrontendScoreTool extends Tool
         $commonRules = $allIssues->countBy('rule')->sortDesc()->take(5);
 
         return Response::text(json_encode([
-            'period' => "Last {$days} days",
+            'period' => $days === 1 ? 'Last 24 hours' : "Last {$days} days",
             'total_audits' => $results->count(),
             'overall_average' => round($results->avg('score'), 1),
             'trend' => $trend,

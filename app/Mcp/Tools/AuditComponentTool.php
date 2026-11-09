@@ -32,18 +32,18 @@ class AuditComponentTool extends Tool
 
         $this->auditor->storeResult(
             'component',
-            $result['overall_score'],
-            $result['all_issues'],
+            $result['score'],
+            $result['issues'],
             $validated['context'] ?? null,
         );
 
         return Response::text(json_encode([
-            'overall_score' => $result['overall_score'],
-            'quality_grade' => $result['quality_grade'],
+            'score' => $result['score'],
+            'grade' => $result['grade'],
             'category_scores' => $result['category_scores'],
             'issues_count' => $result['issues_count'],
-            'all_issues' => $result['all_issues'],
-            'top_recommendations' => $result['top_recommendations'],
+            'issues' => $result['issues'],
+            'recommendations' => $result['recommendations'],
         ], JSON_PRETTY_PRINT));
     }
 

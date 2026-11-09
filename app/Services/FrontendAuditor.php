@@ -67,9 +67,16 @@ class FrontendAuditor
             $headings[] = $level;
         }
 
+        if (! empty($headings) && $headings[0] !== 1) {
+            $issues[] = $this->issue('warning', 'heading-order', "Document should start with <h1>, found <h{$headings[0]}>.", null);
+        }
+
         for ($i = 1; $i < count($headings); $i++) {
             if ($headings[$i] > $headings[$i - 1] + 1) {
                 $issues[] = $this->issue('warning', 'heading-order', "Heading level skipped: h{$headings[$i - 1]} to h{$headings[$i]}. Do not skip heading levels.", null);
+            }
+            if ($headings[$i] < $headings[$i - 1] - 1) {
+                $issues[] = $this->issue('warning', 'heading-order', "Heading jumps backward: h{$headings[$i - 1]} to h{$headings[$i]}. Maintain a logical heading hierarchy.", null);
             }
         }
 
@@ -83,6 +90,10 @@ class FrontendAuditor
             if ($id) {
                 $labels = $xpath->query("//label[@for='{$id}']");
                 $hasLabel = $labels->length > 0;
+            }
+
+            if (! $hasLabel) {
+                $hasLabel = $xpath->query('ancestor::label', $input)->length > 0;
             }
 
             if (! $hasLabel && ! $hasAriaLabel && ! $hasAriaLabelledby) {
@@ -164,6 +175,90 @@ class FrontendAuditor
             }
         }
 
+        // Invalid ARIA roles
+        $validRoles = ['alert', 'alertdialog', 'application', 'article', 'banner', 'blockquote', 'button', 'caption', 'cell', 'checkbox', 'code', 'columnheader', 'combobox', 'complementary', 'contentinfo', 'definition', 'deletion', 'dialog', 'directory', 'document', 'emphasis', 'feed', 'figure', 'form', 'generic', 'grid', 'gridcell', 'group', 'heading', 'img', 'insertion', 'link', 'list', 'listbox', 'listitem', 'log', 'main', 'marquee', 'math', 'menu', 'menubar', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'meter', 'navigation', 'none', 'note', 'option', 'paragraph', 'presentation', 'progressbar', 'radio', 'radiogroup', 'region', 'row', 'rowgroup', 'rowheader', 'scrollbar', 'search', 'searchbox', 'separator', 'slider', 'spinbutton', 'status', 'strong', 'subscript', 'superscript', 'switch', 'tab', 'table', 'tablist', 'tabpanel', 'term', 'textbox', 'timer', 'toolbar', 'tooltip', 'tree', 'treegrid', 'treeitem'];
+        foreach ($xpath->query('//*[@role]') as $el) {
+            $role = strtolower(trim($el->getAttribute('role')));
+            if ($role !== '' && ! in_array($role, $validRoles)) {
+                $issues[] = $this->issue('critical', 'invalid-role', "Invalid ARIA role \"{$role}\". Use a valid WAI-ARIA role.", $el);
+            }
+        }
+
+        // aria-hidden on focusable elements
+        foreach ($xpath->query('//*[@aria-hidden="true"]') as $el) {
+            $tag = strtolower($el->nodeName);
+            $isFocusable = in_array($tag, ['a', 'button', 'input', 'select', 'textarea']) || $el->hasAttribute('tabindex');
+            if ($isFocusable) {
+                $issues[] = $this->issue('critical', 'aria-hidden-focusable', 'Focusable element has aria-hidden="true". It is invisible to screen readers but reachable by keyboard, creating a confusing experience.', $el);
+            }
+        }
+
+        // aria-labelledby pointing to nonexistent ID
+        foreach ($xpath->query('//*[@aria-labelledby]') as $el) {
+            $ids = preg_split('/\s+/', trim($el->getAttribute('aria-labelledby')));
+            foreach ($ids as $refId) {
+                if ($refId !== '' && $xpath->query("//*[@id='{$refId}']")->length === 0) {
+                    $issues[] = $this->issue('warning', 'aria-labelledby-missing', "aria-labelledby references id \"{$refId}\" which does not exist in the document.", $el);
+                }
+            }
+        }
+
+        // Duplicate IDs
+        $idCounts = [];
+        foreach ($xpath->query('//*[@id]') as $el) {
+            $id = $el->getAttribute('id');
+            if ($id !== '') {
+                $idCounts[$id] = ($idCounts[$id] ?? 0) + 1;
+            }
+        }
+        foreach ($idCounts as $id => $count) {
+            if ($count > 1) {
+                $issues[] = [
+                    'severity' => 'critical',
+                    'rule' => 'duplicate-id',
+                    'message' => "Duplicate id \"{$id}\" found {$count} times. IDs must be unique — duplicates break aria-labelledby, label[for], and fragment links.",
+                    'element' => "id=\"{$id}\"",
+                ];
+            }
+        }
+
+        // iframes without title
+        foreach ($xpath->query('//iframe') as $iframe) {
+            if (! $iframe->hasAttribute('title') || trim($iframe->getAttribute('title')) === '') {
+                $issues[] = $this->issue('warning', 'iframe-title', 'iframe missing a title attribute. Screen readers use it to describe the embedded content.', $iframe);
+            }
+        }
+
+        // Links whose only content is an image with empty alt (no accessible name)
+        foreach ($xpath->query('//a') as $a) {
+            $text = trim($a->textContent);
+            $ariaLabel = trim($a->getAttribute('aria-label'));
+            if ($text === '' && $ariaLabel === '') {
+                $imgs = $xpath->query('.//img', $a);
+                if ($imgs->length > 0) {
+                    $allEmpty = true;
+                    foreach ($imgs as $img) {
+                        if (trim($img->getAttribute('alt')) !== '') {
+                            $allEmpty = false;
+                            break;
+                        }
+                    }
+                    if ($allEmpty) {
+                        $issues[] = $this->issue('critical', 'link-name', 'Link has no accessible name. Its only content is an image with empty or missing alt text.', $a);
+                    }
+                }
+            }
+        }
+
+        // Generic link text
+        $genericTexts = ['click here', 'here', 'read more', 'more', 'link', 'learn more'];
+        foreach ($xpath->query('//a') as $a) {
+            $text = strtolower(trim($a->textContent));
+            if (in_array($text, $genericTexts)) {
+                $issues[] = $this->issue('warning', 'link-text-generic', "Link text \"{$text}\" is not descriptive. Use text that describes the destination or purpose.", $a);
+            }
+        }
+
         // outline:none check in inline styles
         foreach ($xpath->query('//*[contains(@style,"outline")]') as $el) {
             $style = $el->getAttribute('style');
@@ -184,21 +279,27 @@ class FrontendAuditor
     {
         $issues = [];
 
+        $css = $this->stripCssCommentsAndStrings($css);
+
         // !important count
         $importantCount = preg_match_all('/!important/', $css);
+        $importantContext = [];
+        preg_match_all('/([a-z-]+)\s*:[^;]*!important/i', $css, $impMatches);
+        $importantContext = array_slice(array_unique($impMatches[1] ?? []), 0, 5);
+        $importantEl = $importantContext ? implode(', ', $importantContext).' !important' : '!important';
         if ($importantCount > 3) {
             $issues[] = [
                 'severity' => 'warning',
                 'rule' => 'important-overuse',
                 'message' => "Found {$importantCount} uses of !important. Excessive !important indicates specificity problems. Refactor selectors instead.",
-                'element' => '',
+                'element' => $importantEl,
             ];
         } elseif ($importantCount > 0) {
             $issues[] = [
                 'severity' => 'info',
                 'rule' => 'important-usage',
                 'message' => "Found {$importantCount} use(s) of !important. Consider if these are truly necessary.",
-                'element' => '',
+                'element' => $importantEl,
             ];
         }
 
@@ -269,13 +370,15 @@ class FrontendAuditor
         }
 
         // float for layout
-        $floatCount = preg_match_all('/\bfloat\s*:\s*(left|right)\b/', $css);
+        $floatMatches = [];
+        preg_match_all('/\bfloat\s*:\s*(left|right)\b/', $css, $floatMatches);
+        $floatCount = count($floatMatches[0]);
         if ($floatCount > 0) {
             $issues[] = [
                 'severity' => 'warning',
                 'rule' => 'float-layout',
                 'message' => "Found {$floatCount} float-based layout(s). Use flexbox or CSS grid for modern, robust layouts.",
-                'element' => '',
+                'element' => 'float: '.($floatMatches[1][0] ?? 'left'),
             ];
         }
 
@@ -289,13 +392,15 @@ class FrontendAuditor
             ];
         }
 
-        // outline: none without focus-visible
-        if (preg_match('/outline\s*:\s*(none|0)\b/', $css) && ! preg_match('/:focus-visible/', $css)) {
+        // outline: none without visible focus replacement
+        $outlineMatch = [];
+        preg_match('/([^{}]*)\{[^}]*outline\s*:\s*(none|0)\b/', $css, $outlineMatch);
+        if ($outlineMatch && ! preg_match('/:focus-visible/', $css) && ! preg_match('/box-shadow\s*:/', $css)) {
             $issues[] = [
                 'severity' => 'critical',
                 'rule' => 'outline-removed',
-                'message' => 'outline: none/0 found without :focus-visible replacement. This removes the keyboard focus indicator. Always provide a visible alternative.',
-                'element' => '',
+                'message' => 'outline: none/0 found without :focus-visible or box-shadow replacement. This removes the keyboard focus indicator.',
+                'element' => trim($outlineMatch[1] ?? '').' { outline: '.($outlineMatch[2] ?? 'none').' }',
             ];
         }
 
@@ -303,11 +408,80 @@ class FrontendAuditor
         $hasAnimation = (bool) preg_match('/animation|transition|@keyframes/', $css);
         $hasReducedMotion = (bool) preg_match('/prefers-reduced-motion/', $css);
         if ($hasAnimation && ! $hasReducedMotion) {
+            $animMatch = [];
+            preg_match('/(animation|transition|@keyframes)[^;{]*/', $css, $animMatch);
             $issues[] = [
                 'severity' => 'warning',
                 'rule' => 'reduced-motion',
                 'message' => 'Animations/transitions found but no prefers-reduced-motion query. Respect users who prefer reduced motion.',
-                'element' => '',
+                'element' => mb_substr(trim($animMatch[0] ?? 'animation/transition'), 0, 80),
+            ];
+        }
+
+        // transition: all
+        if (preg_match('/transition\s*:\s*all\b/', $css) || preg_match('/transition-property\s*:\s*all\b/', $css)) {
+            $issues[] = [
+                'severity' => 'warning',
+                'rule' => 'transition-all',
+                'message' => 'transition-property: all is wasteful and can cause unexpected animations. Specify exact properties (e.g. transition: opacity 200ms, transform 200ms).',
+                'element' => 'transition: all',
+            ];
+        }
+
+        // Duplicate properties in same rule
+        preg_match_all('/\{([^}]+)\}/s', $css, $ruleBlocks);
+        foreach ($ruleBlocks[1] ?? [] as $block) {
+            $props = [];
+            preg_match_all('/([\w-]+)\s*:/', $block, $propMatches);
+            foreach ($propMatches[1] as $p) {
+                $props[$p] = ($props[$p] ?? 0) + 1;
+            }
+            foreach ($props as $p => $count) {
+                if ($count > 1) {
+                    $issues[] = [
+                        'severity' => 'warning',
+                        'rule' => 'duplicate-property',
+                        'message' => "Property \"{$p}\" is declared {$count} times in the same rule. This is usually unintentional — remove the duplicate.",
+                        'element' => $p,
+                    ];
+                }
+            }
+        }
+
+        // Obsolete vendor prefixes
+        $obsoletePrefixes = ['-webkit-border-radius', '-moz-border-radius', '-webkit-box-shadow', '-moz-box-shadow', '-webkit-transform', '-moz-transform', '-webkit-transition', '-moz-transition', '-webkit-animation', '-moz-animation', '-webkit-box-sizing', '-moz-box-sizing', '-webkit-opacity', '-ms-filter'];
+        foreach ($obsoletePrefixes as $prefix) {
+            if (str_contains($css, $prefix)) {
+                $issues[] = [
+                    'severity' => 'info',
+                    'rule' => 'vendor-prefix-obsolete',
+                    'message' => "\"{$prefix}\" is no longer needed. Modern browsers support the unprefixed version.",
+                    'element' => $prefix,
+                ];
+                break;
+            }
+        }
+
+        // Fixed pixel widths (layout-breaking)
+        preg_match_all('/(?:^|[;\s{])width\s*:\s*(\d+)px/m', $css, $fixedWidths);
+        foreach ($fixedWidths[1] ?? [] as $w) {
+            if ((int) $w > 400) {
+                $issues[] = [
+                    'severity' => 'warning',
+                    'rule' => 'fixed-width',
+                    'message' => "width: {$w}px is a fixed pixel width. Use max-width, percentage, or viewport units for responsive layouts.",
+                    'element' => "width: {$w}px",
+                ];
+            }
+        }
+
+        // Non-CSS input detection
+        if (! preg_match('/[{:;]/', $css) && strlen(trim($css)) > 10) {
+            $issues[] = [
+                'severity' => 'warning',
+                'rule' => 'not-css',
+                'message' => 'Input does not appear to be valid CSS. No selectors, properties, or rules detected.',
+                'element' => mb_substr(trim($css), 0, 60),
             ];
         }
 
@@ -332,8 +506,8 @@ class FrontendAuditor
      */
     public function checkContrast(string $fg, string $bg, float $fontSize = 16, bool $isBold = false): array
     {
-        $fgRgb = $this->parseColor($fg);
         $bgRgb = $this->parseColor($bg);
+        $fgRgb = $this->parseColor($fg, $bg);
 
         if (! $fgRgb || ! $bgRgb) {
             return [
@@ -349,7 +523,7 @@ class FrontendAuditor
         $bgL = $this->relativeLuminance($bgRgb[0], $bgRgb[1], $bgRgb[2]);
         $ratio = $this->contrastRatio($fgL, $bgL);
 
-        $isLargeText = $fontSize >= 18 || ($fontSize >= 14 && $isBold);
+        $isLargeText = $fontSize >= 24 || ($fontSize >= 18.66 && $isBold);
 
         $aaNormal = $ratio >= 4.5;
         $aaLarge = $ratio >= 3.0;
@@ -385,7 +559,7 @@ class FrontendAuditor
     /**
      * @return array{int, int, int}|null
      */
-    public function parseColor(string $color): ?array
+    public function parseColor(string $color, ?string $backdropColor = null): ?array
     {
         $color = strtolower(trim($color));
 
@@ -407,12 +581,113 @@ class FrontendAuditor
             return [hexdec($m[1]), hexdec($m[2]), hexdec($m[3])];
         }
 
-        // rgb(r, g, b) or rgb(r g b)
-        if (preg_match('/^rgba?\s*\(\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})/', $color, $m)) {
+        // #RRGGBBAA (8-digit hex)
+        if (preg_match('/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i', $color, $m)) {
+            $r = hexdec($m[1]);
+            $g = hexdec($m[2]);
+            $b = hexdec($m[3]);
+            $a = hexdec($m[4]) / 255;
+
+            return $this->compositeAlpha($r, $g, $b, $a, $backdropColor);
+        }
+
+        // #RGBA (4-digit hex)
+        if (preg_match('/^#([0-9a-f])([0-9a-f])([0-9a-f])([0-9a-f])$/i', $color, $m)) {
+            $r = hexdec($m[1].$m[1]);
+            $g = hexdec($m[2].$m[2]);
+            $b = hexdec($m[3].$m[3]);
+            $a = hexdec($m[4].$m[4]) / 255;
+
+            return $this->compositeAlpha($r, $g, $b, $a, $backdropColor);
+        }
+
+        // rgba(r, g, b, a) or rgb(r g b / a)
+        if (preg_match('/^rgba?\s*\(\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*[,\/]\s*([\d.]+)\s*\)/', $color, $m)) {
+            $r = (int) $m[1];
+            $g = (int) $m[2];
+            $b = (int) $m[3];
+            $a = (float) $m[4];
+
+            return $this->compositeAlpha($r, $g, $b, $a, $backdropColor);
+        }
+
+        // rgb(r, g, b) or rgb(r g b) — no alpha
+        if (preg_match('/^rgba?\s*\(\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*\)/', $color, $m)) {
             return [(int) $m[1], (int) $m[2], (int) $m[3]];
         }
 
+        // hsl(h, s%, l%) or hsla(h, s%, l%, a)
+        if (preg_match('/^hsla?\s*\(\s*([\d.]+)\s*[,\s]\s*([\d.]+)%\s*[,\s]\s*([\d.]+)%\s*(?:[,\/]\s*([\d.]+))?\s*\)/', $color, $m)) {
+            $h = fmod((float) $m[1], 360);
+            if ($h < 0) {
+                $h += 360;
+            }
+            $s = min(100, max(0, (float) $m[2])) / 100;
+            $l = min(100, max(0, (float) $m[3])) / 100;
+            $a = isset($m[4]) && $m[4] !== '' ? (float) $m[4] : 1.0;
+
+            [$r, $g, $b] = $this->hslToRgb($h, $s, $l);
+
+            if ($a < 1.0) {
+                return $this->compositeAlpha($r, $g, $b, $a, $backdropColor);
+            }
+
+            return [$r, $g, $b];
+        }
+
         return null;
+    }
+
+    /**
+     * @return array{int, int, int}
+     */
+    private function compositeAlpha(int $r, int $g, int $b, float $a, ?string $backdropColor): array
+    {
+        $a = min(1.0, max(0.0, $a));
+        if ($a >= 1.0) {
+            return [$r, $g, $b];
+        }
+
+        $bg = $backdropColor ? $this->parseColor($backdropColor) : [255, 255, 255];
+        if (! $bg) {
+            $bg = [255, 255, 255];
+        }
+
+        return [
+            (int) round($r * $a + $bg[0] * (1 - $a)),
+            (int) round($g * $a + $bg[1] * (1 - $a)),
+            (int) round($b * $a + $bg[2] * (1 - $a)),
+        ];
+    }
+
+    /**
+     * @return array{int, int, int}
+     */
+    private function hslToRgb(float $h, float $s, float $l): array
+    {
+        $c = (1 - abs(2 * $l - 1)) * $s;
+        $x = $c * (1 - abs(fmod($h / 60, 2) - 1));
+        $m = $l - $c / 2;
+
+        if ($h < 60) {
+            [$r1, $g1, $b1] = [$c, $x, 0];
+        } elseif ($h < 120) {
+            [$r1, $g1, $b1] = [$x, $c, 0];
+        } elseif ($h < 180) {
+            [$r1, $g1, $b1] = [0, $c, $x];
+        } elseif ($h < 240) {
+            [$r1, $g1, $b1] = [0, $x, $c];
+        } elseif ($h < 300) {
+            [$r1, $g1, $b1] = [$x, 0, $c];
+        } else {
+            [$r1, $g1, $b1] = [$c, 0, $x];
+        }
+
+        return [
+            (int) round(($r1 + $m) * 255),
+            (int) round(($g1 + $m) * 255),
+            (int) round(($b1 + $m) * 255),
+        ];
     }
 
     public function relativeLuminance(int $r, int $g, int $b): float
@@ -445,15 +720,39 @@ class FrontendAuditor
     {
         $issues = [];
 
+        $code = $this->stripCssCommentsAndStrings($code);
+
         if ($type === 'auto') {
             $type = preg_match('/requestAnimationFrame|setInterval|setTimeout|\.animate\(/', $code) ? 'js' : 'css';
         }
 
         // Layout-triggering properties in animations
-        $layoutProps = ['width', 'height', 'top', 'left', 'right', 'bottom', 'margin', 'padding'];
+        $layoutProps = ['width', 'height', 'top', 'left', 'right', 'bottom', 'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left', 'padding', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left'];
+        $flagged = [];
         foreach ($layoutProps as $prop) {
-            if (preg_match('/@keyframes[^}]*\{[^}]*\b'.$prop.'\s*:/s', $code) ||
-                preg_match('/transition[^;]*\b'.$prop.'\b/', $code)) {
+            $escaped = preg_quote($prop, '/');
+            if (preg_match('/@keyframes[^}]*\{[^}]*(?:^|[;\s{])'.$escaped.'\s*:/sm', $code) ||
+                preg_match('/transition[^;]*(?:^|[\s,])'.$escaped.'(?:\s|,|;|$)/', $code)) {
+                // Avoid double-counting: skip shorthand if a longhand already matched
+                $isLonghand = str_contains($prop, '-');
+                $shorthand = $isLonghand ? explode('-', $prop)[0] : null;
+                if ($shorthand && isset($flagged[$shorthand])) {
+                    continue;
+                }
+                if (! $isLonghand) {
+                    // Skip shorthand if any longhand of it was already flagged
+                    $longhandFlagged = false;
+                    foreach ($flagged as $f => $_) {
+                        if (str_starts_with($f, $prop.'-')) {
+                            $longhandFlagged = true;
+                            break;
+                        }
+                    }
+                    if ($longhandFlagged) {
+                        continue;
+                    }
+                }
+                $flagged[$prop] = true;
                 $issues[] = [
                     'severity' => 'critical',
                     'rule' => 'layout-animation',
@@ -553,12 +852,46 @@ class FrontendAuditor
 
         // Static will-change
         if (preg_match('/will-change\s*:\s*(?!auto)/', $code) && ! preg_match('/\.addEventListener|:hover|\.classList/', $code)) {
-            $issues[] = [
-                'severity' => 'info',
-                'rule' => 'static-will-change',
-                'message' => 'will-change appears to be set statically. Apply it dynamically (on hover/focus) and remove after animation completes to free GPU memory.',
-                'element' => '',
-            ];
+            // Universal will-change is worse than just static
+            if (preg_match('/\*\s*\{[^}]*will-change/', $code)) {
+                $issues[] = [
+                    'severity' => 'warning',
+                    'rule' => 'universal-will-change',
+                    'message' => 'will-change applied to * (all elements) defeats its purpose and wastes GPU memory. Apply only to elements that will actually animate.',
+                    'element' => '* { will-change }',
+                ];
+            } else {
+                $issues[] = [
+                    'severity' => 'info',
+                    'rule' => 'static-will-change',
+                    'message' => 'will-change appears to be set statically. Apply it dynamically (on hover/focus) and remove after animation completes to free GPU memory.',
+                    'element' => '',
+                ];
+            }
+        }
+
+        // Layout thrashing in JS (read-then-write pattern)
+        if ($type === 'js') {
+            $readsLayout = (bool) preg_match('/offset(?:Top|Left|Width|Height)|client(?:Top|Left|Width|Height)|getComputedStyle|getBoundingClientRect|scroll(?:Top|Left|Width|Height)/', $code);
+            $writesLayout = (bool) preg_match('/style\s*\.\s*(?:top|left|right|bottom|width|height|margin|padding)/', $code);
+            if ($readsLayout && $writesLayout) {
+                $issues[] = [
+                    'severity' => 'critical',
+                    'rule' => 'layout-thrashing',
+                    'message' => 'Potential layout thrashing: reading layout properties and writing layout styles in the same code. Batch reads before writes, or use requestAnimationFrame to separate them.',
+                    'element' => '',
+                ];
+            }
+
+            // jQuery .animate with layout properties
+            if (preg_match('/\.animate\s*\(\s*\{[^}]*(?:width|height|top|left|right|bottom|margin|padding)/', $code)) {
+                $issues[] = [
+                    'severity' => 'warning',
+                    'rule' => 'jquery-layout-animation',
+                    'message' => 'jQuery .animate() with layout properties (width/height/top/left) causes layout recalculation per frame. Use CSS transitions with transform instead.',
+                    'element' => '.animate()',
+                ];
+            }
         }
 
         return $this->scored($issues);
@@ -583,13 +916,27 @@ class FrontendAuditor
         }
         $animResult = $animCode ? $this->auditAnimation($animCode) : ['score' => 100, 'issues' => []];
 
-        // Weighted score: accessibility 40%, CSS 30%, animation 15%, general 15%
-        $generalScore = 100; // base general score
+        // Deduplicate reduced-motion between CSS and animation audits
+        $seenRules = [];
+        $deduped = function (array $issues) use (&$seenRules): array {
+            $result = [];
+            foreach ($issues as $i) {
+                $key = $i['rule'];
+                if (in_array($key, ['reduced-motion', 'reduced-motion-missing']) && isset($seenRules[$key])) {
+                    continue;
+                }
+                $seenRules[$key] = true;
+                $result[] = $i;
+            }
+
+            return $result;
+        };
+
+        // Weighted score: accessibility 50%, CSS 30%, animation 20%
         $overallScore = (int) round(
-            $a11y['score'] * 0.40
+            $a11y['score'] * 0.50
             + $cssResult['score'] * 0.30
-            + $animResult['score'] * 0.15
-            + $generalScore * 0.15
+            + $animResult['score'] * 0.20
         );
 
         $allIssues = [];
@@ -597,11 +944,11 @@ class FrontendAuditor
             $i['category'] = 'accessibility';
             $allIssues[] = $i;
         }
-        foreach ($cssResult['issues'] as $i) {
+        foreach ($deduped($cssResult['issues']) as $i) {
             $i['category'] = 'css';
             $allIssues[] = $i;
         }
-        foreach ($animResult['issues'] as $i) {
+        foreach ($deduped($animResult['issues']) as $i) {
             $i['category'] = 'animation';
             $allIssues[] = $i;
         }
@@ -610,14 +957,22 @@ class FrontendAuditor
         $severityOrder = ['critical' => 0, 'warning' => 1, 'info' => 2];
         usort($allIssues, fn ($a, $b) => ($severityOrder[$a['severity']] ?? 3) <=> ($severityOrder[$b['severity']] ?? 3));
 
-        // Top recommendations: take the top 5 non-info issues
-        $recommendations = array_values(array_filter(
-            array_slice($allIssues, 0, 5),
+        // Cap score harder when criticals exist
+        $criticalCount = count(array_filter($allIssues, fn ($i) => $i['severity'] === 'critical'));
+        if ($criticalCount >= 2 && $overallScore > 60) {
+            $overallScore = min($overallScore, 60);
+        }
+        if ($criticalCount >= 3 && $overallScore > 50) {
+            $overallScore = min($overallScore, 50);
+        }
+
+        // Recommendations from all issues
+        $recommendations = array_map(fn ($i) => $i['message'], array_filter(
+            $allIssues,
             fn ($i) => $i['severity'] !== 'info'
         ));
-
         if (empty($recommendations) && ! empty($allIssues)) {
-            $recommendations = array_slice($allIssues, 0, 3);
+            $recommendations = array_map(fn ($i) => $i['message'], array_slice($allIssues, 0, 3));
         }
 
         $grade = match (true) {
@@ -629,17 +984,16 @@ class FrontendAuditor
         };
 
         return [
-            'overall_score' => $overallScore,
-            'quality_grade' => $grade,
+            'score' => $overallScore,
+            'grade' => $grade,
             'category_scores' => [
                 'accessibility' => $a11y['score'],
                 'css' => $cssResult['score'],
                 'animation' => $animResult['score'],
-                'general' => $generalScore,
             ],
-            'all_issues' => $allIssues,
+            'issues' => $allIssues,
             'issues_count' => count($allIssues),
-            'top_recommendations' => array_map(fn ($r) => $r['message'], $recommendations),
+            'recommendations' => array_values($recommendations),
         ];
     }
 
@@ -674,10 +1028,38 @@ class FrontendAuditor
             };
         }
 
+        $recommendations = array_values(array_map(
+            fn ($i) => $i['message'],
+            array_filter($issues, fn ($i) => $i['severity'] !== 'info')
+        ));
+
+        $grade = match (true) {
+            max(0, $score) >= 90 => 'A',
+            max(0, $score) >= 80 => 'B',
+            max(0, $score) >= 70 => 'C',
+            max(0, $score) >= 60 => 'D',
+            default => 'F',
+        };
+
         return [
             'score' => max(0, $score),
+            'grade' => $grade,
             'issues' => $issues,
+            'issues_count' => count($issues),
+            'recommendations' => $recommendations,
         ];
+    }
+
+    private function stripCssCommentsAndStrings(string $code): string
+    {
+        // Remove /* ... */ comments
+        $code = preg_replace('/\/\*.*?\*\//s', '', $code);
+        // Remove // line comments (JS and SCSS)
+        $code = preg_replace('/\/\/[^\n]*/', '', $code);
+        // Replace quoted string contents with placeholder to avoid false matches
+        $code = preg_replace('/(["\'`])(?:(?!\1|\\\\).|\\\\.)*\1/', '$1$1', $code);
+
+        return $code;
     }
 
     private function issue(string $severity, string $rule, string $message, mixed $node): array

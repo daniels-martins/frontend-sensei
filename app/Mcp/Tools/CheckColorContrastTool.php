@@ -34,12 +34,14 @@ class CheckColorContrastTool extends Tool
             (bool) ($validated['is_bold'] ?? false),
         );
 
-        $score = isset($result['error']) ? 0 : ($result['passes_minimum'] ? 100 : 30);
+        if (isset($result['error'])) {
+            return Response::error($result['message']);
+        }
+
+        $score = $result['passes_minimum'] ? 100 : 30;
         $issues = [];
 
-        if (isset($result['error'])) {
-            $issues[] = ['severity' => 'critical', 'rule' => 'color-parse', 'message' => $result['message'], 'element' => ''];
-        } elseif (! $result['passes_minimum']) {
+        if (! $result['passes_minimum']) {
             $issues[] = ['severity' => 'critical', 'rule' => 'contrast-fail', 'message' => $result['recommendation'], 'element' => ''];
         }
 
@@ -63,7 +65,7 @@ class CheckColorContrastTool extends Tool
             'font_size' => $schema->number()
                 ->description('Font size in px (default: 16). Affects whether text qualifies as "large" for WCAG thresholds.'),
             'is_bold' => $schema->boolean()
-                ->description('Whether the text is bold. Bold text >= 14px counts as "large text" with relaxed contrast requirements.'),
+                ->description('Whether the text is bold. Bold text >= 18.66px counts as "large text" with relaxed contrast requirements (WCAG 2.2).'),
         ];
     }
 }

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "frontend-sensei": {
+      "command": "php",
+      "args": ["artisan", "mcp:start", "frontend-sensei"],
+      "env": {}
+    }
+  }
+}

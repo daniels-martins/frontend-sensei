@@ -1,0 +1,30 @@
+# Catalog entry for NousResearch/hermes-agent → plugin-catalog/frontend-sensei.yaml
+# Copy this file into your fork of hermes-agent at plugin-catalog/frontend-sensei.yaml
+
+name: frontend-sensei
+version: "1.0.0"
+repo: https://github.com/daniels-martins/frontend-sensei
+sha: REPLACE_WITH_SHA_AFTER_PUSHING
+requires_hermes: ">=0.21.0"
+description: >
+  Professional frontend expertise plugin — audits accessibility, CSS quality,
+  color contrast, animation performance, and component quality via MCP tools.
+  Includes 10 skill files covering UI/UX, WCAG, CSS, animation, React, Vue, and more.
+author: Martins Daniels
+license: MIT
+categories:
+  - Web
+  - Development
+  - Design
+capabilities:
+  tools:
+    - audit-accessibility-tool
+    - audit-animation-tool
+    - audit-component-tool
+    - audit-css-tool
+    - check-color-contrast-tool
+    - frontend-score-tool
+screenshots:
+  - screenshots/tools-list.png
+  - screenshots/contrast-check.png
+  - screenshots/accessibility-audit.png

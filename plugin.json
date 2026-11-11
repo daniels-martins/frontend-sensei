@@ -5,7 +5,18 @@
   "author": "Martins Daniels",
   "homepage": "https://github.com/daniels-martins/frontend-sensei",
   "license": "MIT",
+  "requires_hermes": ">=0.21.0",
   "categories": ["Web", "Development", "Design"],
+  "capabilities": {
+    "tools": [
+      "audit-accessibility-tool",
+      "audit-animation-tool",
+      "audit-component-tool",
+      "audit-css-tool",
+      "check-color-contrast-tool",
+      "frontend-score-tool"
+    ]
+  },
   "skills": [
     "skills/ui-fundamentals",
     "skills/accessibility",
